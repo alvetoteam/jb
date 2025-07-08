@@ -1,2 +1,6 @@
 discord.py
 aiohttp
+fastapi
+uvicorn
+easyocr
+torch==2.0.1
