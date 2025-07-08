@@ -9,15 +9,14 @@ from fastapi.responses import JSONResponse
 import uvicorn
 from datetime import datetime
 
-# === إعداد ديسكورد ===
 TOKEN = os.getenv("DISCORD_TOKEN")
-OCR_API_URL = "http://localhost:8000/upload"  # لأن FastAPI شغال داخلياً
+OCR_API_URL = "http://localhost:8000/upload"
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# === إعداد FastAPI ===
+# === FastAPI ===
 app = FastAPI()
 reader = easyocr.Reader(['en'], gpu=False)
 DATA_FILE = "data.json"
@@ -75,14 +74,12 @@ async def upload_image(file: UploadFile = File(...)):
         "results": comparison
     })
 
-# === تشغيل FastAPI في الخلفية ===
 def run_api():
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 api_thread = threading.Thread(target=run_api)
 api_thread.start()
 
-# === بوت ديسكورد ===
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
