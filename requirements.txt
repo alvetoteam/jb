@@ -1,4 +1,2 @@
-fastapi
-uvicorn
-easyocr
-torch==2.0.1
+discord.py
+aiohttp
