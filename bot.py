@@ -10,13 +10,11 @@ import uvicorn
 from datetime import datetime
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-OCR_API_URL = "http://localhost:8000/upload"
-
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# === FastAPI ===
+# === FastAPI setup ===
 app = FastAPI()
 reader = easyocr.Reader(['en'], gpu=False)
 DATA_FILE = "data.json"
@@ -43,35 +41,13 @@ def analyze_image(image_bytes):
                 players.append({"name": player_name, "power": power})
     return players
 
-def compare(old, new):
-    comparison = []
-    for new_player in new:
-        name = new_player["name"]
-        new_power = new_player["power"]
-        old_power = next((p["power"] for p in old if p["name"] == name), None)
-        if old_power is not None:
-            diff = new_power - old_power
-            percent = round((diff / old_power) * 100, 2) if old_power > 0 else 0
-            comparison.append({
-                "name": name,
-                "old": old_power,
-                "new": new_power,
-                "diff": diff,
-                "percent": percent
-            })
-    return comparison
-
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
     image_bytes = await file.read()
     new_data = analyze_image(image_bytes)
-    old_data = load_data()
-    comparison = compare(old_data, new_data)
-    save_data(new_data)
-
     return JSONResponse(content={
         "timestamp": datetime.utcnow().isoformat(),
-        "results": comparison
+        "raw": new_data  # نرجع البيانات بدون مقارنة
     })
 
 def run_api():
@@ -89,9 +65,11 @@ async def on_message(message):
     if message.author.bot or not message.attachments:
         return
 
+    all_new_data = []
+
     for attachment in message.attachments:
         if any(attachment.filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg"]):
-            await message.channel.send("📷 جارٍ تحليل الصورة...")
+            await message.channel.send(f"📷 تحليل الصورة: `{attachment.filename}`...")
 
             image_bytes = await attachment.read()
             async with aiohttp.ClientSession() as session:
@@ -99,22 +77,53 @@ async def on_message(message):
                 form.add_field("file", image_bytes, filename=attachment.filename, content_type="image/png")
 
                 try:
-                    async with session.post(OCR_API_URL, data=form) as resp:
+                    async with session.post("http://localhost:8000/upload", data=form) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            results = data.get("results", [])
-                            if not results:
-                                await message.channel.send("❌ لا يوجد فرق واضح أو بيانات مقارنة.")
-                                return
-
-                            msg = "📊 **مقارنة القوة:**\n"
-                            for p in results:
-                                msg += f"**{p['name']}**\n"
-                                msg += f"القديمة: {p['old']:,} | الجديدة: {p['new']:,} | الفرق: {p['diff']:+,} | النسبة: {p['percent']}%\n\n"
-                            await message.channel.send(msg)
+                            players = data.get("raw", [])
+                            all_new_data.extend(players)
                         else:
-                            await message.channel.send("⚠️ فشل الاتصال بخدمة OCR.")
+                            await message.channel.send(f"⚠️ فشل في تحليل: {attachment.filename}")
                 except Exception as e:
-                    await message.channel.send(f"❌ خطأ داخلي: {e}")
+                    await message.channel.send(f"❌ خطأ: {e}")
+
+    if not all_new_data:
+        await message.channel.send("❌ لم يتم العثور على بيانات.")
+        return
+
+    # دمج اللاعبين
+    merged = {}
+    for player in all_new_data:
+        name = player["name"]
+        power = player["power"]
+        if name in merged:
+            merged[name] += power
+        else:
+            merged[name] = power
+
+    # مقارنة مع القديمة
+    old_data = load_data()
+    comparison = []
+    for name, new_power in merged.items():
+        old_power = next((p["power"] for p in old_data if p["name"] == name), 0)
+        diff = new_power - old_power
+        percent = round((diff / old_power) * 100, 2) if old_power > 0 else 0
+        comparison.append({
+            "name": name,
+            "old": old_power,
+            "new": new_power,
+            "diff": diff,
+            "percent": percent
+        })
+
+    # حفظ البيانات الجديدة
+    save_data([{"name": name, "power": power} for name, power in merged.items()])
+
+    # إرسال الرد
+    msg = "📊 **مقارنة القوة بعد دمج الصور:**\n"
+    for p in comparison:
+        msg += f"**{p['name']}**\n"
+        msg += f"القديمة: {p['old']:,} | الجديدة: {p['new']:,} | الفرق: {p['diff']:+,} | النسبة: {p['percent']}%\n\n"
+    await message.channel.send(msg)
 
 client.run(TOKEN)
